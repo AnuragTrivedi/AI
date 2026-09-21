@@ -135,12 +135,16 @@ async function startServer() {
     const { ollamaUrl, model, messages, stream = true, options, think } = req.body;
     console.log(`[Ollama Chat] Prompt for model "${model}" (${messages?.length || 0} messages, think: ${think ?? 'default'})`);
 
-    try {
-      const controller = new AbortController();
-      req.on("close", () => {
-        controller.abort();
-      });
+    const controller = new AbortController();
 
+    // Abort Ollama fetch ONLY if the client disconnects before the response completes
+    res.on("close", () => {
+      if (!res.writableEnded) {
+        controller.abort();
+      }
+    });
+
+    try {
       const requestPayload: Record<string, any> = {
         model,
         messages,
@@ -210,8 +214,10 @@ async function startServer() {
       res.end();
     } catch (err: any) {
       if (err.name === "AbortError") {
-        console.log(`[Ollama Chat] Generation cancelled by user`);
-        res.end();
+        if (!res.writableEnded) {
+          console.log(`[Ollama Chat] Generation cancelled by user client`);
+          res.end();
+        }
         return;
       }
       console.error(`[Ollama Chat Connection Error]:`, err.message);

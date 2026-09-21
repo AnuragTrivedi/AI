@@ -355,14 +355,17 @@ export default function App() {
                 if (c.id !== updatedConv.id) return c;
                 const finalMessages = c.messages.map((m) => {
                   if (m.id !== assistantPlaceholderId) return m;
+                  const resolvedThinking = fullThinking || m.thinking;
                   const finalContent =
                     fullText ||
                     m.content ||
-                    (fullThinking || m.thinking ? '' : '*(No response content returned by model)*');
+                    (resolvedThinking
+                      ? ''
+                      : `*(No response tokens returned by model. If running Gemma locally, check your Ollama VRAM/memory or try switching models.)*`);
                   return {
                     ...m,
                     content: finalContent,
-                    thinking: fullThinking || m.thinking,
+                    thinking: resolvedThinking,
                     isStreaming: false,
                     evalCount: stats?.evalCount,
                     evalDuration: stats?.evalDuration,
@@ -503,14 +506,17 @@ export default function App() {
               if (c.id !== updatedConv.id) return c;
               const finalMessages = c.messages.map((m) => {
                 if (m.id !== assistantId) return m;
+                const resolvedThinking = fullThinking || m.thinking;
                 const finalContent =
                   fullText ||
                   m.content ||
-                  (fullThinking || m.thinking ? '' : '*(No response content returned by model)*');
+                  (resolvedThinking
+                    ? ''
+                    : `*(No response tokens returned by model. If running Gemma locally, check your Ollama VRAM/memory or try switching models.)*`);
                 return {
                   ...m,
                   content: finalContent,
-                  thinking: fullThinking || m.thinking,
+                  thinking: resolvedThinking,
                   isStreaming: false,
                   evalCount: stats?.evalCount,
                   tokensPerSecond: stats?.tokensPerSecond,
@@ -623,14 +629,17 @@ export default function App() {
               if (c.id !== updatedConv.id) return c;
               const finalMessages = c.messages.map((m) => {
                 if (m.id !== assistantId) return m;
+                const resolvedThinking = fullThinking || m.thinking;
                 const finalContent =
                   fullText ||
                   m.content ||
-                  (fullThinking || m.thinking ? '' : '*(No response content returned by model)*');
+                  (resolvedThinking
+                    ? ''
+                    : `*(No response tokens returned by model. If running Gemma locally, check your Ollama VRAM/memory or try switching models.)*`);
                 return {
                   ...m,
                   content: finalContent,
-                  thinking: fullThinking || m.thinking,
+                  thinking: resolvedThinking,
                   isStreaming: false,
                   evalCount: stats?.evalCount,
                   tokensPerSecond: stats?.tokensPerSecond,

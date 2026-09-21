@@ -281,7 +281,7 @@ export class OllamaService {
 
       // If this is a Gemma model, cleanly prepend system instructions to the first user message
       if (isGemma && pendingSystemPrompt && msg.role === 'user') {
-        messageContent = `[System Instructions: ${pendingSystemPrompt}]\n\n${messageContent}`;
+        messageContent = `${pendingSystemPrompt}\n\n${messageContent}`;
         pendingSystemPrompt = '';
       }
 
@@ -297,11 +297,16 @@ export class OllamaService {
     const requestedPredict = options?.num_predict ?? 2048;
     const effectivePredict = Math.max(requestedPredict, 3072);
 
-    const payload = {
+    const isThinkingModel =
+      model.toLowerCase().includes('r1') ||
+      model.toLowerCase().includes('think') ||
+      model.toLowerCase().includes('reasoning') ||
+      model.toLowerCase().includes('qwq');
+
+    const payload: Record<string, any> = {
       model,
       messages: ollamaMessages,
       stream: true,
-      think: true,
       options: {
         temperature: options?.temperature ?? 0.7,
         top_p: options?.top_p ?? 0.9,
@@ -312,9 +317,14 @@ export class OllamaService {
       },
     };
 
+    if (isThinkingModel || model.toLowerCase().includes('gemma')) {
+      payload.think = true;
+    }
+
     let streamSucceeded = false;
     let accumulatedText = '';
     let accumulatedThinking = '';
+    let isInsideThinkTag = false;
     let evalCount = 0;
     let evalDuration = 0;
 
@@ -387,11 +397,48 @@ export class OllamaService {
               callbacks.onThinkingChunk?.(thinkingToken);
             }
 
-            // Capture standard assistant response content
+            // Capture standard assistant response content (and handle in-band <think> tags)
             const contentToken = chunk.message?.content || (chunk as any).response || '';
             if (contentToken) {
-              accumulatedText += contentToken;
-              callbacks.onChunk(contentToken);
+              if (contentToken.includes('<think>')) {
+                isInsideThinkTag = true;
+                const parts = contentToken.split('<think>');
+                if (parts[0]) {
+                  accumulatedText += parts[0];
+                  callbacks.onChunk(parts[0]);
+                }
+                const afterThink = parts.slice(1).join('<think>');
+                if (afterThink.includes('</think>')) {
+                  const [thinkPart, afterEnd] = afterThink.split('</think>');
+                  accumulatedThinking += thinkPart;
+                  callbacks.onThinkingChunk?.(thinkPart);
+                  isInsideThinkTag = false;
+                  if (afterEnd) {
+                    accumulatedText += afterEnd;
+                    callbacks.onChunk(afterEnd);
+                  }
+                } else {
+                  accumulatedThinking += afterThink;
+                  callbacks.onThinkingChunk?.(afterThink);
+                }
+              } else if (isInsideThinkTag) {
+                if (contentToken.includes('</think>')) {
+                  const [thinkPart, afterEnd] = contentToken.split('</think>');
+                  accumulatedThinking += thinkPart;
+                  callbacks.onThinkingChunk?.(thinkPart);
+                  isInsideThinkTag = false;
+                  if (afterEnd) {
+                    accumulatedText += afterEnd;
+                    callbacks.onChunk(afterEnd);
+                  }
+                } else {
+                  accumulatedThinking += contentToken;
+                  callbacks.onThinkingChunk?.(contentToken);
+                }
+              } else {
+                accumulatedText += contentToken;
+                callbacks.onChunk(contentToken);
+              }
             }
 
             if (chunk.eval_count) evalCount = chunk.eval_count;
@@ -440,6 +487,17 @@ export class OllamaService {
       // so the user receives the model's actual answer rather than an empty bubble.
       if (!accumulatedText && accumulatedThinking) {
         accumulatedText = accumulatedThinking;
+      }
+
+      // If the model stream completed but returned zero tokens (e.g. Gemma runner memory limit or context overflow):
+      if (!accumulatedText && !accumulatedThinking) {
+        if (useSimulatedFallback) {
+          console.warn(`Model "${model}" completed with 0 tokens; falling back to local simulation generator.`);
+          await this.simulateLocalResponse(model, messages, signal, callbacks);
+          return;
+        } else {
+          accumulatedText = `The local model **${model}** finished its turn without returning text tokens.\n\n### Troubleshooting Tips for ${model}:\n* **Memory / VRAM Limit**: Gemma and large models require sufficient GPU memory. Check your \`ollama serve\` console for potential memory warnings or runner aborts.\n* **Context Window**: If this conversation is long, try starting a **New Chat** or increasing \`num_ctx\` in **Settings**.\n* **Alternative Quantization**: Consider pulling a lighter variant such as \`gemma4:e4b\` or \`qwen2.5:7b\`.\n* **System Prompt**: Try resetting custom system prompt to default in **Settings**.`;
+        }
       }
 
       streamSucceeded = true;

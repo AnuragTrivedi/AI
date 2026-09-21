@@ -41,7 +41,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   const [copied, setCopied] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState(message.content);
-  const [showThinking, setShowThinking] = useState(false);
+  const [showThinking, setShowThinking] = useState(!message.content && !!message.thinking);
 
   const isUser = message.role === 'user';
   const isDark = theme === 'dark';
