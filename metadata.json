@@ -1,0 +1,6 @@
+{
+  "name": "Local AI Chatbot",
+  "description": "Offline-first AI chatbot powered by local Ollama models with dynamic model selection, conversation history, and document context.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
