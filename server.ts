@@ -194,8 +194,10 @@ async function startServer() {
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Local AI Chatbot server running on http://0.0.0.0:${PORT}`);
-    console.log(`Connected Ollama target default: http://localhost:11434`);
+    console.log(`\n  🚀 Local AI Chatbot server is running!`);
+    console.log(`  ➜ Local:   http://localhost:${PORT}/`);
+    console.log(`  ➜ Loopback: http://127.0.0.1:${PORT}/`);
+    console.log(`  ➜ Ollama target default: http://localhost:11434\n`);
   });
 }
 
