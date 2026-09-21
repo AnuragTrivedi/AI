@@ -15,6 +15,9 @@ import {
   Zap,
   AlertTriangle,
   FileSpreadsheet,
+  Brain,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react';
 import { Message, AttachedFile } from '../types';
 
@@ -38,6 +41,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   const [copied, setCopied] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState(message.content);
+  const [showThinking, setShowThinking] = useState(false);
 
   const isUser = message.role === 'user';
   const isDark = theme === 'dark';
@@ -201,6 +205,62 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
                 isDark ? 'text-neutral-200' : 'text-neutral-800'
               }`}
             >
+              {/* Collapsible Thinking / Reasoning Process for thinking models (e.g. Gemma 4, DeepSeek R1) */}
+              {message.thinking && (
+                <div
+                  className={`not-prose mb-3.5 rounded-xl border transition-all ${
+                    isDark
+                      ? 'bg-neutral-900/80 border-purple-900/40 shadow-xs'
+                      : 'bg-purple-50/60 border-purple-200/80 shadow-xs'
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setShowThinking((prev) => !prev)}
+                    className={`w-full flex items-center justify-between px-3.5 py-2.5 text-xs font-medium rounded-xl transition-colors select-none ${
+                      isDark
+                        ? 'text-neutral-300 hover:text-neutral-100 hover:bg-neutral-800/60'
+                        : 'text-neutral-700 hover:text-neutral-900 hover:bg-purple-100/50'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <div className="flex items-center justify-center w-5 h-5 rounded-md bg-purple-500/20 text-purple-400">
+                        <Brain className="w-3.5 h-3.5" />
+                      </div>
+                      <span className="font-semibold text-[13px] tracking-tight">Thought Process</span>
+                      {message.isStreaming && !message.content ? (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium font-mono bg-purple-500/20 text-purple-300 animate-pulse border border-purple-500/30">
+                          Reasoning...
+                        </span>
+                      ) : (
+                        <span className="text-[11px] text-neutral-400 font-normal">
+                          ({message.thinking.length} chars)
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-neutral-400">
+                      {showThinking ? (
+                        <ChevronDown className="w-4 h-4" />
+                      ) : (
+                        <ChevronRight className="w-4 h-4" />
+                      )}
+                    </div>
+                  </button>
+
+                  {(showThinking || (message.isStreaming && !message.content)) && (
+                    <div
+                      className={`px-3.5 py-3 pt-1 text-xs font-mono leading-relaxed whitespace-pre-wrap border-t max-h-72 overflow-y-auto ${
+                        isDark
+                          ? 'text-neutral-300 border-purple-900/30 bg-neutral-950/40'
+                          : 'text-neutral-600 border-purple-200/60 bg-white/60'
+                      }`}
+                    >
+                      {message.thinking}
+                    </div>
+                  )}
+                </div>
+              )}
+
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={{
@@ -295,7 +355,11 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
                     <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
                   </span>
                   <span className="font-mono">
-                    {message.content ? 'Generating tokens...' : 'Connecting to Ollama / loading model weights...'}
+                    {message.content
+                      ? 'Generating tokens...'
+                      : message.thinking
+                      ? 'Reasoning / thinking...'
+                      : 'Connecting to Ollama / loading model weights...'}
                   </span>
                 </div>
               )}

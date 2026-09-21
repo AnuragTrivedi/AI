@@ -132,8 +132,8 @@ async function startServer() {
 
   // Ollama chat endpoint with chunked streaming: POST /api/ollama/chat
   app.post("/api/ollama/chat", async (req, res) => {
-    const { ollamaUrl, model, messages, stream = true, options } = req.body;
-    console.log(`[Ollama Chat] Prompt for model "${model}" (${messages?.length || 0} messages)`);
+    const { ollamaUrl, model, messages, stream = true, options, think } = req.body;
+    console.log(`[Ollama Chat] Prompt for model "${model}" (${messages?.length || 0} messages, think: ${think ?? 'default'})`);
 
     try {
       const controller = new AbortController();
@@ -141,15 +141,22 @@ async function startServer() {
         controller.abort();
       });
 
+      const requestPayload: Record<string, any> = {
+        model,
+        messages,
+        stream: !!stream,
+      };
+      if (options && typeof options === "object") {
+        requestPayload.options = options;
+      }
+      if (think !== undefined) {
+        requestPayload.think = think;
+      }
+
       const ollamaRes = await fetchFromOllama(ollamaUrl, "/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model,
-          messages,
-          stream: !!stream,
-          options,
-        }),
+        body: JSON.stringify(requestPayload),
         signal: controller.signal,
       });
 

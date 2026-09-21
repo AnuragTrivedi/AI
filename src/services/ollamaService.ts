@@ -2,8 +2,13 @@ import { OllamaModel, OllamaOptions, Message, StreamChatChunk, OllamaConnectionS
 
 export interface ChatStreamCallbacks {
   onChunk: (text: string, stats?: { evalCount?: number; evalDuration?: number }) => void;
+  onThinkingChunk?: (thinkingText: string) => void;
   onError: (error: Error) => void;
-  onFinish: (fullText: string, stats?: { evalCount?: number; evalDuration?: number; tokensPerSecond?: number }) => void;
+  onFinish: (
+    fullText: string,
+    stats?: { evalCount?: number; evalDuration?: number; tokensPerSecond?: number },
+    fullThinking?: string
+  ) => void;
 }
 
 // Fallback models when Ollama connection is initializing or in simulated demo mode
@@ -238,17 +243,23 @@ export class OllamaService {
     // Prepare message payload according to Ollama API
     const ollamaMessages: Array<{ role: string; content: string; images?: string[] }> = [];
 
-    // Include system prompt if configured
-    if (systemPrompt && systemPrompt.trim()) {
+    // Gemma models (Gemma 1, 2, 4 derivatives) do not support a separate 'system' role
+    // in their native Ollama template. Sending role: 'system' causes Gemma to immediately
+    // output <end_of_turn> or empty text. We fold system prompt into the first user turn.
+    const isGemma = model.toLowerCase().includes('gemma');
+    let pendingSystemPrompt = systemPrompt && systemPrompt.trim() ? systemPrompt.trim() : '';
+
+    if (!isGemma && pendingSystemPrompt) {
       ollamaMessages.push({
         role: 'system',
-        content: systemPrompt.trim(),
+        content: pendingSystemPrompt,
       });
+      pendingSystemPrompt = '';
     }
 
     // Map conversation messages
-    for (const msg of messages) {
-      // If there are attached files, append their extracted text or images
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i];
       let messageContent = msg.content;
       const images: string[] = [];
 
@@ -268,6 +279,12 @@ export class OllamaService {
         }
       }
 
+      // If this is a Gemma model, cleanly prepend system instructions to the first user message
+      if (isGemma && pendingSystemPrompt && msg.role === 'user') {
+        messageContent = `[System Instructions: ${pendingSystemPrompt}]\n\n${messageContent}`;
+        pendingSystemPrompt = '';
+      }
+
       ollamaMessages.push({
         role: msg.role,
         content: messageContent,
@@ -275,22 +292,29 @@ export class OllamaService {
       });
     }
 
+    // Ensure we don't starve thinking models (like Gemma 4, DeepSeek R1)
+    // with a tiny token budget that gets eaten by reasoning before final output.
+    const requestedPredict = options?.num_predict ?? 2048;
+    const effectivePredict = Math.max(requestedPredict, 3072);
+
     const payload = {
       model,
       messages: ollamaMessages,
       stream: true,
+      think: true,
       options: {
         temperature: options?.temperature ?? 0.7,
         top_p: options?.top_p ?? 0.9,
         top_k: options?.top_k ?? 40,
         num_ctx: options?.num_ctx ?? 4096,
-        num_predict: options?.num_predict ?? 2048,
+        num_predict: effectivePredict,
         repeat_penalty: options?.repeat_penalty ?? 1.1,
       },
     };
 
     let streamSucceeded = false;
     let accumulatedText = '';
+    let accumulatedThinking = '';
     let evalCount = 0;
     let evalDuration = 0;
 
@@ -345,19 +369,41 @@ export class OllamaService {
 
           try {
             const chunk: StreamChatChunk = JSON.parse(trimmed);
-            // Support both standard /api/chat chunk and legacy /api/generate format
-            const token = chunk.message?.content || (chunk as any).response || '';
-            if (token) {
-              accumulatedText += token;
-              callbacks.onChunk(token);
+
+            // Check if Ollama emitted a streaming error (e.g. runner crash, CUDA OOM)
+            if ((chunk as any).error) {
+              throw new Error((chunk as any).error);
             }
+
+            // Capture reasoning/thinking tokens (Gemma 4, DeepSeek R1, Qwen 3 reasoning)
+            const thinkingToken =
+              chunk.message?.thinking ||
+              (chunk as any).thinking ||
+              chunk.message?.reasoning_content ||
+              '';
+
+            if (thinkingToken) {
+              accumulatedThinking += thinkingToken;
+              callbacks.onThinkingChunk?.(thinkingToken);
+            }
+
+            // Capture standard assistant response content
+            const contentToken = chunk.message?.content || (chunk as any).response || '';
+            if (contentToken) {
+              accumulatedText += contentToken;
+              callbacks.onChunk(contentToken);
+            }
+
             if (chunk.eval_count) evalCount = chunk.eval_count;
             if (chunk.eval_duration) evalDuration = chunk.eval_duration;
             if (chunk.done) {
               streamSucceeded = true;
             }
-          } catch (jsonErr) {
-            // Partial JSON line in stream buffer, will be processed in next read
+          } catch (jsonErr: any) {
+            // If it's a rethrown Ollama error, bubble it up
+            if (jsonErr.message && !jsonErr.message.includes('JSON')) {
+              throw jsonErr;
+            }
           }
         }
       }
@@ -366,29 +412,53 @@ export class OllamaService {
       if (buffer.trim()) {
         try {
           const chunk: StreamChatChunk = JSON.parse(buffer.trim());
-          const token = chunk.message?.content || (chunk as any).response || '';
-          if (token) {
-            accumulatedText += token;
-            callbacks.onChunk(token);
+          if ((chunk as any).error) {
+            throw new Error((chunk as any).error);
           }
-        } catch {
-          // ignore trailing invalid JSON
+          const thinkingToken =
+            chunk.message?.thinking ||
+            (chunk as any).thinking ||
+            chunk.message?.reasoning_content ||
+            '';
+          if (thinkingToken) {
+            accumulatedThinking += thinkingToken;
+            callbacks.onThinkingChunk?.(thinkingToken);
+          }
+          const contentToken = chunk.message?.content || (chunk as any).response || '';
+          if (contentToken) {
+            accumulatedText += contentToken;
+            callbacks.onChunk(contentToken);
+          }
+        } catch (tailErr: any) {
+          if (tailErr.message && !tailErr.message.includes('JSON')) {
+            throw tailErr;
+          }
         }
+      }
+
+      // If content was empty but the model returned reasoning/thoughts, surface the reasoning
+      // so the user receives the model's actual answer rather than an empty bubble.
+      if (!accumulatedText && accumulatedThinking) {
+        accumulatedText = accumulatedThinking;
       }
 
       streamSucceeded = true;
       const tokensPerSecond =
         evalDuration > 0 ? Math.round((evalCount / (evalDuration / 1e9)) * 10) / 10 : undefined;
 
-      callbacks.onFinish(accumulatedText, {
-        evalCount,
-        evalDuration,
-        tokensPerSecond,
-      });
+      callbacks.onFinish(
+        accumulatedText,
+        {
+          evalCount,
+          evalDuration,
+          tokensPerSecond,
+        },
+        accumulatedThinking
+      );
       return;
     } catch (err: any) {
       if (err.name === 'AbortError') {
-        callbacks.onFinish(accumulatedText);
+        callbacks.onFinish(accumulatedText, undefined, accumulatedThinking);
         return;
       }
 

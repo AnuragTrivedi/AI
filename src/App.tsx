@@ -311,6 +311,24 @@ export default function App() {
               })
             );
           },
+          onThinkingChunk: (thinkingChunk) => {
+            setConversations((prev) =>
+              prev.map((c) => {
+                if (c.id !== updatedConv.id) return c;
+                return {
+                  ...c,
+                  messages: c.messages.map((m) => {
+                    if (m.id !== assistantPlaceholderId) return m;
+                    return {
+                      ...m,
+                      thinking: (m.thinking || '') + thinkingChunk,
+                      isStreaming: true,
+                    };
+                  }),
+                };
+              })
+            );
+          },
           onError: (err) => {
             setIsGenerating(false);
             setConversations((prev) =>
@@ -330,16 +348,21 @@ export default function App() {
               })
             );
           },
-          onFinish: (fullText, stats) => {
+          onFinish: (fullText, stats, fullThinking) => {
             setIsGenerating(false);
             setConversations((prev) => {
               const nextList = prev.map((c) => {
                 if (c.id !== updatedConv.id) return c;
                 const finalMessages = c.messages.map((m) => {
                   if (m.id !== assistantPlaceholderId) return m;
+                  const finalContent =
+                    fullText ||
+                    m.content ||
+                    (fullThinking || m.thinking ? '' : '*(No response content returned by model)*');
                   return {
                     ...m,
-                    content: fullText || m.content || '*(No response content returned by model)*',
+                    content: finalContent,
+                    thinking: fullThinking || m.thinking,
                     isStreaming: false,
                     evalCount: stats?.evalCount,
                     evalDuration: stats?.evalDuration,
@@ -444,6 +467,20 @@ export default function App() {
             })
           );
         },
+        onThinkingChunk: (thinkingChunk) => {
+          setConversations((prev) =>
+            prev.map((c) => {
+              if (c.id !== updatedConv.id) return c;
+              return {
+                ...c,
+                messages: c.messages.map((m) => {
+                  if (m.id !== assistantId) return m;
+                  return { ...m, thinking: (m.thinking || '') + thinkingChunk, isStreaming: true };
+                }),
+              };
+            })
+          );
+        },
         onError: (err) => {
           setIsGenerating(false);
           setConversations((prev) =>
@@ -459,16 +496,21 @@ export default function App() {
             })
           );
         },
-        onFinish: (fullText, stats) => {
+        onFinish: (fullText, stats, fullThinking) => {
           setIsGenerating(false);
           setConversations((prev) => {
             const nextList = prev.map((c) => {
               if (c.id !== updatedConv.id) return c;
               const finalMessages = c.messages.map((m) => {
                 if (m.id !== assistantId) return m;
+                const finalContent =
+                  fullText ||
+                  m.content ||
+                  (fullThinking || m.thinking ? '' : '*(No response content returned by model)*');
                 return {
                   ...m,
-                  content: fullText || m.content,
+                  content: finalContent,
+                  thinking: fullThinking || m.thinking,
                   isStreaming: false,
                   evalCount: stats?.evalCount,
                   tokensPerSecond: stats?.tokensPerSecond,
@@ -545,6 +587,20 @@ export default function App() {
             })
           );
         },
+        onThinkingChunk: (thinkingChunk) => {
+          setConversations((prev) =>
+            prev.map((c) => {
+              if (c.id !== updatedConv.id) return c;
+              return {
+                ...c,
+                messages: c.messages.map((m) => {
+                  if (m.id !== assistantId) return m;
+                  return { ...m, thinking: (m.thinking || '') + thinkingChunk, isStreaming: true };
+                }),
+              };
+            })
+          );
+        },
         onError: (err) => {
           setIsGenerating(false);
           setConversations((prev) =>
@@ -560,16 +616,21 @@ export default function App() {
             })
           );
         },
-        onFinish: (fullText, stats) => {
+        onFinish: (fullText, stats, fullThinking) => {
           setIsGenerating(false);
           setConversations((prev) => {
             const nextList = prev.map((c) => {
               if (c.id !== updatedConv.id) return c;
               const finalMessages = c.messages.map((m) => {
                 if (m.id !== assistantId) return m;
+                const finalContent =
+                  fullText ||
+                  m.content ||
+                  (fullThinking || m.thinking ? '' : '*(No response content returned by model)*');
                 return {
                   ...m,
-                  content: fullText || m.content,
+                  content: finalContent,
+                  thinking: fullThinking || m.thinking,
                   isStreaming: false,
                   evalCount: stats?.evalCount,
                   tokensPerSecond: stats?.tokensPerSecond,

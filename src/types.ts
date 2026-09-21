@@ -15,10 +15,11 @@ export interface Message {
   id: string;
   role: MessageRole;
   content: string;
+  thinking?: string;
+  isStreaming?: boolean;
   timestamp: number;
   modelUsed?: string;
   attachedFiles?: AttachedFile[];
-  isStreaming?: boolean;
   error?: string;
   evalCount?: number;
   evalDuration?: number;
@@ -97,7 +98,12 @@ export interface StreamChatChunk {
   message?: {
     role: string;
     content: string;
+    thinking?: string;
+    reasoning_content?: string;
   };
+  thinking?: string;
+  reasoning_content?: string;
+  error?: string;
   done: boolean;
   total_duration?: number;
   load_duration?: number;
