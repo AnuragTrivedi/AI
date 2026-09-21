@@ -67,18 +67,22 @@ export default function App() {
     }
   }, [theme]);
 
-  // Load Conversations from IndexedDB
-  const loadConversations = useCallback(async () => {
-    const list = await storageService.getAllConversations();
-    setConversations(list);
-    if (list.length > 0 && !activeConversationId) {
-      setActiveConversationId(list[0].id);
-    }
-  }, [activeConversationId]);
-
+  // Load Conversations from IndexedDB on initial mount only
   useEffect(() => {
-    loadConversations();
-  }, [loadConversations]);
+    let mounted = true;
+    const initConversations = async () => {
+      const list = await storageService.getAllConversations();
+      if (!mounted) return;
+      setConversations(list);
+      if (list.length > 0) {
+        setActiveConversationId((prev) => (prev ? prev : list[0].id));
+      }
+    };
+    initConversations();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   // Check Ollama Connection and Refresh Models dynamically
   const checkConnectionAndModels = useCallback(async (customUrl?: string, mode?: 'proxy' | 'direct') => {
@@ -237,6 +241,7 @@ export default function App() {
       };
       setActiveConversationId(updatedConv.id);
       setConversations((prev) => [updatedConv, ...prev]);
+      storageService.saveConversation(updatedConv);
     } else {
       updatedConv = {
         ...targetConv!,
@@ -247,6 +252,7 @@ export default function App() {
       setConversations((prev) =>
         prev.map((c) => (c.id === updatedConv.id ? updatedConv : c))
       );
+      storageService.saveConversation(updatedConv);
     }
 
     // Index files into local RAG if enabled
@@ -331,8 +337,8 @@ export default function App() {
           },
           onError: (err) => {
             setIsGenerating(false);
-            setConversations((prev) =>
-              prev.map((c) => {
+            setConversations((prev) => {
+              const nextList = prev.map((c) => {
                 if (c.id !== updatedConv.id) return c;
                 return {
                   ...c,
@@ -345,8 +351,11 @@ export default function App() {
                     };
                   }),
                 };
-              })
-            );
+              });
+              const saved = nextList.find((c) => c.id === updatedConv.id);
+              if (saved) storageService.saveConversation(saved);
+              return nextList;
+            });
           },
           onFinish: (fullText, stats, fullThinking) => {
             setIsGenerating(false);
@@ -384,8 +393,8 @@ export default function App() {
     } catch (unexpectedErr: any) {
       console.error('Unexpected error during chat stream:', unexpectedErr);
       setIsGenerating(false);
-      setConversations((prev) =>
-        prev.map((c) => {
+      setConversations((prev) => {
+        const nextList = prev.map((c) => {
           if (c.id !== updatedConv.id) return c;
           return {
             ...c,
@@ -398,8 +407,11 @@ export default function App() {
               };
             }),
           };
-        })
-      );
+        });
+        const saved = nextList.find((c) => c.id === updatedConv.id);
+        if (saved) storageService.saveConversation(saved);
+        return nextList;
+      });
     }
   };
 
@@ -443,6 +455,7 @@ export default function App() {
     setConversations((prev) =>
       prev.map((c) => (c.id === updatedConv.id ? updatedConv : c))
     );
+    storageService.saveConversation(updatedConv);
     setIsGenerating(true);
 
     await ollamaService.streamChatResponse(
@@ -566,6 +579,7 @@ export default function App() {
     setConversations((prev) =>
       prev.map((c) => (c.id === updatedConv.id ? updatedConv : c))
     );
+    storageService.saveConversation(updatedConv);
     setIsGenerating(true);
 
     await ollamaService.streamChatResponse(
@@ -665,6 +679,20 @@ export default function App() {
   const handleStopGeneration = () => {
     ollamaService.stopGeneration();
     setIsGenerating(false);
+    if (activeConversationId) {
+      setConversations((prev) => {
+        const nextList = prev.map((c) => {
+          if (c.id !== activeConversationId) return c;
+          return {
+            ...c,
+            messages: c.messages.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m)),
+          };
+        });
+        const saved = nextList.find((c) => c.id === activeConversationId);
+        if (saved) storageService.saveConversation(saved);
+        return nextList;
+      });
+    }
   };
 
   // Toggle Theme
