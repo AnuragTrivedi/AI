@@ -312,8 +312,15 @@ export class OllamaService {
       });
 
       if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(errText || `Ollama responded with HTTP ${response.status}`);
+        let errorMsg = `Ollama responded with HTTP ${response.status}`;
+        try {
+          const jsonErr = await response.json();
+          errorMsg = jsonErr.error || jsonErr.details || errorMsg;
+        } catch {
+          const errText = await response.text();
+          if (errText) errorMsg = errText;
+        }
+        throw new Error(errorMsg);
       }
 
       if (!response.body) {
@@ -338,9 +345,11 @@ export class OllamaService {
 
           try {
             const chunk: StreamChatChunk = JSON.parse(trimmed);
-            if (chunk.message?.content) {
-              accumulatedText += chunk.message.content;
-              callbacks.onChunk(chunk.message.content);
+            // Support both standard /api/chat chunk and legacy /api/generate format
+            const token = chunk.message?.content || (chunk as any).response || '';
+            if (token) {
+              accumulatedText += token;
+              callbacks.onChunk(token);
             }
             if (chunk.eval_count) evalCount = chunk.eval_count;
             if (chunk.eval_duration) evalDuration = chunk.eval_duration;
@@ -348,7 +357,7 @@ export class OllamaService {
               streamSucceeded = true;
             }
           } catch (jsonErr) {
-            // Partial JSON line in stream
+            // Partial JSON line in stream buffer, will be processed in next read
           }
         }
       }
@@ -357,12 +366,13 @@ export class OllamaService {
       if (buffer.trim()) {
         try {
           const chunk: StreamChatChunk = JSON.parse(buffer.trim());
-          if (chunk.message?.content) {
-            accumulatedText += chunk.message.content;
-            callbacks.onChunk(chunk.message.content);
+          const token = chunk.message?.content || (chunk as any).response || '';
+          if (token) {
+            accumulatedText += token;
+            callbacks.onChunk(token);
           }
         } catch {
-          // ignore trailing
+          // ignore trailing invalid JSON
         }
       }
 
@@ -382,9 +392,14 @@ export class OllamaService {
         return;
       }
 
+      const isModelNotFound =
+        err.message?.toLowerCase().includes('not found') ||
+        err.message?.toLowerCase().includes('pull');
+
       // If connection to live Ollama failed, and simulation is enabled, provide responsive local simulation
-      if (useSimulatedFallback && !streamSucceeded && !accumulatedText) {
-        console.warn('Live Ollama stream unavailable, activating local fallback response generator:', err.message);
+      // BUT if the error is specifically that the requested model is not found, do not fake the response
+      if (useSimulatedFallback && !streamSucceeded && !accumulatedText && !isModelNotFound) {
+        console.warn('Live Ollama stream unavailable, activating local fallback generator:', err.message);
         await this.simulateLocalResponse(model, messages, signal, callbacks);
         return;
       }

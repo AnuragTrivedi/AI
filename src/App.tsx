@@ -281,79 +281,100 @@ export default function App() {
       });
 
     // Stream response from Ollama
-    await ollamaService.streamChatResponse(
-      {
-        model: selectedModel,
-        messages: contextMessages,
-        systemPrompt: settings.systemPrompt,
-        options: settings.options,
-        ollamaUrl: settings.ollamaUrl,
-        mode: settings.connectionMode,
-        useSimulatedFallback: settings.useSimulatedFallback,
-      },
-      {
-        onChunk: (chunk) => {
-          setConversations((prev) =>
-            prev.map((c) => {
-              if (c.id !== updatedConv.id) return c;
-              return {
-                ...c,
-                messages: c.messages.map((m) => {
-                  if (m.id !== assistantPlaceholderId) return m;
-                  return {
-                    ...m,
-                    content: m.content + chunk,
-                    isStreaming: true,
-                  };
-                }),
-              };
-            })
-          );
+    try {
+      await ollamaService.streamChatResponse(
+        {
+          model: selectedModel,
+          messages: contextMessages,
+          systemPrompt: settings.systemPrompt,
+          options: settings.options,
+          ollamaUrl: settings.ollamaUrl,
+          mode: settings.connectionMode,
+          useSimulatedFallback: settings.useSimulatedFallback,
         },
-        onError: (err) => {
-          setIsGenerating(false);
-          setConversations((prev) =>
-            prev.map((c) => {
-              if (c.id !== updatedConv.id) return c;
-              return {
-                ...c,
-                messages: c.messages.map((m) => {
-                  if (m.id !== assistantPlaceholderId) return m;
-                  return {
-                    ...m,
-                    isStreaming: false,
-                    error: err.message,
-                  };
-                }),
-              };
-            })
-          );
-        },
-        onFinish: (fullText, stats) => {
-          setIsGenerating(false);
-          setConversations((prev) => {
-            const nextList = prev.map((c) => {
-              if (c.id !== updatedConv.id) return c;
-              const finalMessages = c.messages.map((m) => {
-                if (m.id !== assistantPlaceholderId) return m;
+        {
+          onChunk: (chunk) => {
+            setConversations((prev) =>
+              prev.map((c) => {
+                if (c.id !== updatedConv.id) return c;
                 return {
-                  ...m,
-                  content: fullText || m.content,
-                  isStreaming: false,
-                  evalCount: stats?.evalCount,
-                  evalDuration: stats?.evalDuration,
-                  tokensPerSecond: stats?.tokensPerSecond,
+                  ...c,
+                  messages: c.messages.map((m) => {
+                    if (m.id !== assistantPlaceholderId) return m;
+                    return {
+                      ...m,
+                      content: m.content + chunk,
+                      isStreaming: true,
+                    };
+                  }),
                 };
+              })
+            );
+          },
+          onError: (err) => {
+            setIsGenerating(false);
+            setConversations((prev) =>
+              prev.map((c) => {
+                if (c.id !== updatedConv.id) return c;
+                return {
+                  ...c,
+                  messages: c.messages.map((m) => {
+                    if (m.id !== assistantPlaceholderId) return m;
+                    return {
+                      ...m,
+                      isStreaming: false,
+                      error: err.message,
+                    };
+                  }),
+                };
+              })
+            );
+          },
+          onFinish: (fullText, stats) => {
+            setIsGenerating(false);
+            setConversations((prev) => {
+              const nextList = prev.map((c) => {
+                if (c.id !== updatedConv.id) return c;
+                const finalMessages = c.messages.map((m) => {
+                  if (m.id !== assistantPlaceholderId) return m;
+                  return {
+                    ...m,
+                    content: fullText || m.content || '*(No response content returned by model)*',
+                    isStreaming: false,
+                    evalCount: stats?.evalCount,
+                    evalDuration: stats?.evalDuration,
+                    tokensPerSecond: stats?.tokensPerSecond,
+                  };
+                });
+                const saved = { ...c, messages: finalMessages, updatedAt: Date.now() };
+                storageService.saveConversation(saved);
+                return saved;
               });
-              const saved = { ...c, messages: finalMessages, updatedAt: Date.now() };
-              storageService.saveConversation(saved);
-              return saved;
+              return nextList;
             });
-            return nextList;
-          });
-        },
-      }
-    );
+          },
+        }
+      );
+    } catch (unexpectedErr: any) {
+      console.error('Unexpected error during chat stream:', unexpectedErr);
+      setIsGenerating(false);
+      setConversations((prev) =>
+        prev.map((c) => {
+          if (c.id !== updatedConv.id) return c;
+          return {
+            ...c,
+            messages: c.messages.map((m) => {
+              if (m.id !== assistantPlaceholderId) return m;
+              return {
+                ...m,
+                isStreaming: false,
+                error: unexpectedErr.message || 'An unexpected error occurred while communicating with Ollama.',
+              };
+            }),
+          };
+        })
+      );
+    }
   };
 
   // Regenerate response

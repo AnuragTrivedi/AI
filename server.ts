@@ -23,10 +23,46 @@ async function startServer() {
     next();
   });
 
-  // Default Ollama host from env or fallback to standard localhost:11434
-  const getOllamaBaseUrl = (customUrl?: string) => {
-    const url = customUrl || process.env.OLLAMA_HOST || "http://localhost:11434";
-    return url.replace(/\/+$/, "");
+  // Default Ollama host from env or fallback to standard 127.0.0.1:11434
+  const getOllamaBaseUrls = (customUrl?: string): string[] => {
+    const raw = customUrl || process.env.OLLAMA_HOST || "http://127.0.0.1:11434";
+    const cleaned = raw.replace(/\/+$/, "");
+    const list: string[] = [];
+
+    // Prioritize 127.0.0.1 to avoid Node.js undici IPv6 (::1) ECONNREFUSED issues on local machines
+    if (cleaned.includes("://localhost")) {
+      list.push(cleaned.replace("://localhost", "://127.0.0.1"));
+      list.push(cleaned);
+    } else if (cleaned.includes("://127.0.0.1")) {
+      list.push(cleaned);
+      list.push(cleaned.replace("://127.0.0.1", "://localhost"));
+    } else {
+      list.push(cleaned);
+    }
+    return list;
+  };
+
+  // Helper to fetch Ollama with automatic loopback fallback (127.0.0.1 <-> localhost)
+  const fetchFromOllama = async (
+    customUrl: string | undefined,
+    endpoint: string,
+    options?: RequestInit
+  ): Promise<Response> => {
+    const candidateUrls = getOllamaBaseUrls(customUrl);
+    let lastError: any = null;
+
+    for (const baseUrl of candidateUrls) {
+      const fullUrl = `${baseUrl}${endpoint}`;
+      try {
+        const res = await fetch(fullUrl, options);
+        return res;
+      } catch (err: any) {
+        lastError = err;
+        // If aborted by client, break immediately
+        if (err.name === "AbortError") throw err;
+      }
+    }
+    throw lastError || new Error(`Could not connect to Ollama at ${candidateUrls[0]}`);
   };
 
   // Health check endpoint
@@ -40,20 +76,19 @@ async function startServer() {
 
   // Ollama connection & version check
   app.get("/api/ollama/version", async (req, res) => {
-    const targetBase = getOllamaBaseUrl(req.query.ollamaUrl as string);
     try {
-      const response = await fetch(`${targetBase}/api/version`, {
-        signal: AbortSignal.timeout(3000),
+      const response = await fetchFromOllama(req.query.ollamaUrl as string, "/api/version", {
+        signal: AbortSignal.timeout(3500),
       });
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
       const data = await response.json();
-      res.json({ success: true, version: data.version, host: targetBase });
+      res.json({ success: true, version: data.version, host: req.query.ollamaUrl || "http://127.0.0.1:11434" });
     } catch (err: any) {
       res.status(503).json({
         success: false,
-        error: "Ollama is not running or cannot be reached at " + targetBase,
+        error: "Ollama is not running or cannot be reached at " + (req.query.ollamaUrl || "http://localhost:11434"),
         details: err.message,
       });
     }
@@ -61,10 +96,9 @@ async function startServer() {
 
   // Ollama list installed models: GET /api/tags
   app.get("/api/ollama/tags", async (req, res) => {
-    const targetBase = getOllamaBaseUrl(req.query.ollamaUrl as string);
     try {
-      const response = await fetch(`${targetBase}/api/tags`, {
-        signal: AbortSignal.timeout(4000),
+      const response = await fetchFromOllama(req.query.ollamaUrl as string, "/api/tags", {
+        signal: AbortSignal.timeout(4500),
       });
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
@@ -74,7 +108,7 @@ async function startServer() {
     } catch (err: any) {
       res.status(503).json({
         models: [],
-        error: "Failed to fetch models from Ollama at " + targetBase,
+        error: "Failed to fetch models from Ollama. Make sure 'ollama serve' is running.",
         details: err.message,
       });
     }
@@ -82,9 +116,8 @@ async function startServer() {
 
   // Ollama model info: POST /api/show
   app.post("/api/ollama/show", async (req, res) => {
-    const targetBase = getOllamaBaseUrl(req.body.ollamaUrl);
     try {
-      const response = await fetch(`${targetBase}/api/show`, {
+      const response = await fetchFromOllama(req.body.ollamaUrl, "/api/show", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: req.body.name }),
@@ -100,7 +133,7 @@ async function startServer() {
   // Ollama chat endpoint with chunked streaming: POST /api/ollama/chat
   app.post("/api/ollama/chat", async (req, res) => {
     const { ollamaUrl, model, messages, stream = true, options } = req.body;
-    const targetBase = getOllamaBaseUrl(ollamaUrl);
+    console.log(`[Ollama Chat] Prompt for model "${model}" (${messages?.length || 0} messages)`);
 
     try {
       const controller = new AbortController();
@@ -108,7 +141,7 @@ async function startServer() {
         controller.abort();
       });
 
-      const ollamaRes = await fetch(`${targetBase}/api/chat`, {
+      const ollamaRes = await fetchFromOllama(ollamaUrl, "/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -122,8 +155,19 @@ async function startServer() {
 
       if (!ollamaRes.ok) {
         const errorText = await ollamaRes.text();
+        console.error(`[Ollama Chat HTTP ${ollamaRes.status}]:`, errorText);
+        let parsedMessage = errorText;
+        try {
+          const jsonErr = JSON.parse(errorText);
+          parsedMessage = jsonErr.error || errorText;
+        } catch {}
+
+        if (ollamaRes.status === 404) {
+          parsedMessage = `Model "${model}" not found in your local Ollama. Please run "ollama pull ${model}" in your terminal or switch models from the top menu.`;
+        }
+
         res.status(ollamaRes.status).json({
-          error: `Ollama error (${ollamaRes.status}): ${errorText}`,
+          error: parsedMessage,
         });
         return;
       }
@@ -134,11 +178,13 @@ async function startServer() {
         return;
       }
 
-      // Set streaming headers for chunked transfer
+      // Set streaming headers for real-time chunked transfer
       res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
       res.setHeader("Transfer-Encoding", "chunked");
       res.setHeader("Cache-Control", "no-cache, no-transform");
       res.setHeader("Connection", "keep-alive");
+      res.setHeader("X-Accel-Buffering", "no");
+      res.flushHeaders();
 
       if (!ollamaRes.body) {
         res.status(500).end("No response body from Ollama");
@@ -150,16 +196,21 @@ async function startServer() {
         const { done, value } = await reader.read();
         if (done) break;
         res.write(value);
+        if (typeof (res as any).flush === "function") {
+          (res as any).flush();
+        }
       }
       res.end();
     } catch (err: any) {
       if (err.name === "AbortError") {
+        console.log(`[Ollama Chat] Generation cancelled by user`);
         res.end();
         return;
       }
+      console.error(`[Ollama Chat Connection Error]:`, err.message);
       if (!res.headersSent) {
         res.status(503).json({
-          error: `Could not connect to Ollama at ${targetBase}: ${err.message}`,
+          error: `Could not connect to Ollama (${err.message}). Please ensure Ollama is running with "ollama serve".`,
         });
       } else {
         res.end();

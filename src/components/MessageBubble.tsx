@@ -289,26 +289,47 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
 
               {/* Streaming Indicator */}
               {message.isStreaming && (
-                <span className="inline-flex items-center gap-1.5 ml-1 text-emerald-500 font-semibold">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping inline-block" />
-                  <span className="text-xs font-mono">Generating response...</span>
-                </span>
+                <div className="flex items-center gap-2 py-1 text-emerald-500 font-medium text-xs sm:text-sm">
+                  <span className="relative flex h-2.5 w-2.5">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                  </span>
+                  <span className="font-mono">
+                    {message.content ? 'Generating tokens...' : 'Connecting to Ollama / loading model weights...'}
+                  </span>
+                </div>
               )}
             </div>
           )}
 
           {/* Error notification if message failed */}
           {message.error && (
-            <div className="flex items-center gap-2 p-3 rounded-lg bg-rose-950/40 border border-rose-800/60 text-rose-300 text-xs">
-              <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
-              <div className="flex-1">{message.error}</div>
-              <button
-                type="button"
-                onClick={() => onRegenerate(message.id)}
-                className="px-2.5 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded text-xs font-medium"
-              >
-                Retry
-              </button>
+            <div className="p-3.5 rounded-xl bg-rose-950/40 border border-rose-800/60 text-rose-200 text-xs sm:text-sm space-y-2.5 shadow-xs">
+              <div className="flex items-start gap-2.5">
+                <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />
+                <div className="flex-1 font-medium whitespace-pre-wrap leading-relaxed">{message.error}</div>
+              </div>
+              {message.error.toLowerCase().includes('pull') && (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-neutral-900/90 border border-neutral-800 text-neutral-200 font-mono text-xs">
+                  <span className="select-all">ollama pull {message.modelUsed || selectedModel}</span>
+                  <button
+                    type="button"
+                    onClick={() => navigator.clipboard.writeText(`ollama pull ${message.modelUsed || selectedModel}`)}
+                    className="ml-auto text-emerald-400 hover:text-emerald-300 font-sans font-medium text-[11px]"
+                  >
+                    Copy
+                  </button>
+                </div>
+              )}
+              <div className="flex items-center gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => onRegenerate(message.id)}
+                  className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-semibold transition-colors shadow-2xs"
+                >
+                  Retry
+                </button>
+              </div>
             </div>
           )}
 
