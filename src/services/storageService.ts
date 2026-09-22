@@ -80,6 +80,61 @@ class StorageService {
     return this.dbPromise;
   }
 
+  // Deduplicate conversations list and remove duplicate twins from storage
+  deduplicateList(list: Conversation[]): { cleaned: Conversation[]; removedIds: string[] } {
+    const seenIds = new Set<string>();
+    const cleaned: Conversation[] = [];
+    const removedIds: string[] = [];
+
+    for (const conv of list) {
+      if (!conv || !conv.id) continue;
+
+      if (seenIds.has(conv.id)) {
+        removedIds.push(conv.id);
+        continue;
+      }
+
+      // Check if there is an existing conversation in cleaned that is an identical rapid twin:
+      // (same title, created within 15 seconds of each other, identical first user message)
+      const firstUserMsg = conv.messages.find((m) => m.role === 'user')?.content.trim();
+      const twinIdx = cleaned.findIndex((other) => {
+        if (other.title !== conv.title) return false;
+        const timeDiff = Math.abs((other.createdAt || 0) - (conv.createdAt || 0));
+        if (timeDiff > 15000) return false;
+        const otherUserMsg = other.messages.find((m) => m.role === 'user')?.content.trim();
+        return firstUserMsg && otherUserMsg && firstUserMsg === otherUserMsg;
+      });
+
+      if (twinIdx >= 0) {
+        // Identified rapid duplicate twin
+        const twin = cleaned[twinIdx];
+        const convAssistantLength = conv.messages
+          .filter((m) => m.role === 'assistant' && m.content)
+          .reduce((acc, m) => acc + m.content.length, 0);
+        const twinAssistantLength = twin.messages
+          .filter((m) => m.role === 'assistant' && m.content)
+          .reduce((acc, m) => acc + m.content.length, 0);
+
+        if (convAssistantLength > twinAssistantLength) {
+          // Replace twin with conv because conv has more response tokens
+          removedIds.push(twin.id);
+          seenIds.delete(twin.id);
+          cleaned[twinIdx] = conv;
+          seenIds.add(conv.id);
+        } else {
+          // Keep existing twin, mark conv for removal
+          removedIds.push(conv.id);
+        }
+        continue;
+      }
+
+      seenIds.add(conv.id);
+      cleaned.push(conv);
+    }
+
+    return { cleaned, removedIds };
+  }
+
   // Retrieve all conversations sorted by updatedAt descending
   async getAllConversations(): Promise<Conversation[]> {
     try {
@@ -90,18 +145,35 @@ class StorageService {
         const req = store.getAll();
 
         req.onsuccess = () => {
-          const results: Conversation[] = req.result || [];
-          results.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-          this.memoryCacheConversations = results;
-          resolve(results);
+          const rawResults: Conversation[] = req.result || [];
+          rawResults.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+          const { cleaned, removedIds } = this.deduplicateList(rawResults);
+          this.memoryCacheConversations = cleaned;
+
+          // Asynchronously prune orphaned duplicates from storage
+          if (removedIds.length > 0) {
+            removedIds.forEach((id) => this.deleteConversation(id));
+          }
+
+          resolve(cleaned);
         };
 
         req.onerror = () => {
-          resolve(this.getConversationsFromLocalStorage());
+          const fallback = this.getConversationsFromLocalStorage();
+          const { cleaned, removedIds } = this.deduplicateList(fallback);
+          if (removedIds.length > 0) {
+            this.saveConversationsToLocalStorage(cleaned);
+          }
+          resolve(cleaned);
         };
       });
     } catch {
-      return this.getConversationsFromLocalStorage();
+      const fallback = this.getConversationsFromLocalStorage();
+      const { cleaned, removedIds } = this.deduplicateList(fallback);
+      if (removedIds.length > 0) {
+        this.saveConversationsToLocalStorage(cleaned);
+      }
+      return cleaned;
     }
   }
 

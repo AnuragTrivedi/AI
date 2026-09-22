@@ -38,6 +38,14 @@ export default function App() {
   const [isCompareOpen, setIsCompareOpen] = useState(false);
   const [isBannerDismissed, setIsBannerDismissed] = useState(false);
 
+  // Synchronous references to prevent race-condition double creation
+  const isSendingMessageRef = React.useRef(false);
+  const activeConversationIdRef = React.useRef<string | null>(null);
+
+  useEffect(() => {
+    activeConversationIdRef.current = activeConversationId;
+  }, [activeConversationId]);
+
   // Initialize Settings & Apply Theme
   useEffect(() => {
     async function loadInitial() {
@@ -162,6 +170,8 @@ export default function App() {
   const handleNewChat = () => {
     ollamaService.stopGeneration();
     setIsGenerating(false);
+    isSendingMessageRef.current = false;
+    activeConversationIdRef.current = null;
     setActiveConversationId(null);
   };
 
@@ -170,6 +180,8 @@ export default function App() {
     if (id === activeConversationId) return;
     ollamaService.stopGeneration();
     setIsGenerating(false);
+    isSendingMessageRef.current = false;
+    activeConversationIdRef.current = id;
     setActiveConversationId(id);
   };
 
@@ -201,9 +213,14 @@ export default function App() {
 
   // Send message flow
   const handleSendMessage = async (content: string, files: AttachedFile[] = []) => {
-    if (isGenerating) return;
+    if (isSendingMessageRef.current || isGenerating) return;
+    isSendingMessageRef.current = true;
+    setIsGenerating(true);
 
-    let targetConv = activeConversation;
+    const currentActiveId = activeConversationIdRef.current;
+    let targetConv = currentActiveId
+      ? conversations.find((c) => c.id === currentActiveId) || null
+      : null;
     const isNew = !targetConv;
 
     // Auto-generate title if this is a new conversation
@@ -229,8 +246,9 @@ export default function App() {
 
     let updatedConv: Conversation;
     if (isNew) {
+      const newId = 'conv_' + Date.now().toString(36) + Math.random().toString(36).substring(2, 7);
       updatedConv = {
-        id: 'conv_' + Math.random().toString(36).substring(2, 9),
+        id: newId,
         title,
         createdAt: Date.now(),
         updatedAt: Date.now(),
@@ -239,8 +257,14 @@ export default function App() {
         systemPrompt: settings.systemPrompt,
         options: settings.options,
       };
-      setActiveConversationId(updatedConv.id);
-      setConversations((prev) => [updatedConv, ...prev]);
+      activeConversationIdRef.current = newId;
+      setActiveConversationId(newId);
+      setConversations((prev) => {
+        if (prev.some((c) => c.id === updatedConv.id)) {
+          return prev.map((c) => (c.id === updatedConv.id ? updatedConv : c));
+        }
+        return [updatedConv, ...prev];
+      });
       storageService.saveConversation(updatedConv);
     } else {
       updatedConv = {
@@ -270,8 +294,6 @@ export default function App() {
     if (settings.ragConfig.enabled) {
       ragContext = await ragService.retrieveContext(content, settings.ragConfig);
     }
-
-    setIsGenerating(true);
 
     // Prepare context messages including past memory
     const contextMessages = updatedConv.messages
@@ -337,6 +359,7 @@ export default function App() {
           },
           onError: (err) => {
             setIsGenerating(false);
+            isSendingMessageRef.current = false;
             setConversations((prev) => {
               const nextList = prev.map((c) => {
                 if (c.id !== updatedConv.id) return c;
@@ -359,6 +382,7 @@ export default function App() {
           },
           onFinish: (fullText, stats, fullThinking) => {
             setIsGenerating(false);
+            isSendingMessageRef.current = false;
             setConversations((prev) => {
               const nextList = prev.map((c) => {
                 if (c.id !== updatedConv.id) return c;
@@ -393,6 +417,7 @@ export default function App() {
     } catch (unexpectedErr: any) {
       console.error('Unexpected error during chat stream:', unexpectedErr);
       setIsGenerating(false);
+      isSendingMessageRef.current = false;
       setConversations((prev) => {
         const nextList = prev.map((c) => {
           if (c.id !== updatedConv.id) return c;
@@ -412,6 +437,8 @@ export default function App() {
         if (saved) storageService.saveConversation(saved);
         return nextList;
       });
+    } finally {
+      isSendingMessageRef.current = false;
     }
   };
 
